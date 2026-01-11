@@ -150,6 +150,50 @@ The process of learning to denoise also learns to align!
 
 ## 3. Noise Types and Standard Deviation
 
+### ⚠️ Important: What is "Timestep" in Our Code?
+
+**Key Understanding:**
+- **Timestep `t`** is just a **single scalar value** between 0 and 1 (e.g., `t = 0.5`)
+- **One timestep per batch** - we sample ONE `t` value for the entire batch
+- **We add noise ONCE** based on that `t` value
+- **NOT progressive** - we don't keep adding noise over multiple steps
+
+**Common Confusion:**
+- ❌ **Wrong**: "Timestep means we progressively add noise over t=0, t=1, t=2, ..."
+- ✅ **Correct**: "Timestep `t` is a single value (0 to 1) that determines noise level"
+
+**Traditional Diffusion Models (for reference):**
+```
+t=0: Clean image
+t=1: Add small noise
+t=2: Add more noise
+...
+t=T: Maximum noise
+(Progressive noise addition over T timesteps)
+```
+
+**Our Simplified Approach:**
+```
+1. Sample random t ∈ [0, 1] (ONE value per batch)
+2. Add noise with level = t * max_std (ONE time)
+3. Done! (Single step, not progressive)
+```
+
+**Think of `t` as:**
+- A "noise level" parameter (0 = no noise, 1 = max noise)
+- A "how much noise" knob
+- Just terminology - think of it as "noise amount" if that helps!
+
+**In Our Code:**
+```python
+# For each batch:
+t = torch.rand(1).item()  # Sample ONE t value (e.g., 0.5)
+noisy_img = add_noise_linear(img_embeds, t, max_noise)  # Add noise ONCE
+# All samples in batch get the same noise level = t * max_std
+```
+
+---
+
 ### What is Standard Deviation (std)?
 
 **Standard deviation (std)** measures how much values spread out from the mean.
@@ -910,6 +954,37 @@ else:  # cosine
     noisy_txt = add_noise_cosine(txt_embeds, t, max_noise)
 ```
 
+**Important: Timestep vs Batch Size**
+
+- **Timestep (t)**: A **single random value** between 0 and 1 (e.g., `t = 0.5`)
+  - Determines **how much noise** to add to embeddings
+  - **NOT related to batch size**!
+  - Same timestep `t` is used for **ALL samples** in the batch
+  
+- **Batch Size**: The number of samples in a batch (e.g., 32 image-text pairs)
+  - `img_embeds.shape = [32, 512]` where 32 is the batch size
+  - Independent of timestep
+
+**Example:**
+```python
+# Batch of 32 image-text pairs
+batch_size = 32
+img_embeds = [32, 512]  # 32 samples, each with 512-dim embedding
+
+# Sample ONE timestep for the entire batch
+t = torch.rand(1).item()  # e.g., t = 0.5 (single number!)
+
+# Apply SAME noise level (t) to ALL 32 samples
+noisy_img = add_noise_linear(img_embeds, t, max_noise)
+# noisy_img still has shape [32, 512]
+# All 32 samples get noise with the same std = t * max_std
+```
+
+**Key Point:**
+- One timestep `t` per batch (not per sample)
+- All samples in the batch get the same noise level
+- This is standard in diffusion models (simplifies training)
+
 **Noise Function (Linear):**
 ```python
 def add_noise_linear(embeddings, t, max_std=0.3):
@@ -922,6 +997,44 @@ def add_noise_linear(embeddings, t, max_std=0.3):
 - Original: `[0.5, 0.3, 0.8]`
 - Noise (t=0.5): `[0.02, -0.01, 0.03]`
 - Noisy: `[0.52, 0.29, 0.83]`
+
+**⚠️ Important: Timestep vs Batch Size**
+
+**Timestep (t)** and **Batch Size** are completely different:
+
+- **Timestep (t)**: 
+  - A **single scalar value** between 0 and 1 (e.g., `t = 0.5`)
+  - Determines **how much noise** to add
+  - **One timestep per batch** (same `t` for all samples in the batch)
+  - Example: `t = 0.5` means "add medium noise level"
+
+- **Batch Size**:
+  - The **number of samples** in a batch (e.g., 32)
+  - Determines **how many embeddings** we process together
+  - Independent of timestep
+  - Example: `batch_size = 32` means "32 image-text pairs"
+
+**In Code:**
+```python
+# Batch: 32 image-text pairs
+batch_size = 32
+img_embeds = torch.randn(32, 512)  # [32, 512]: 32 samples, 512-dim each
+
+# Sample ONE timestep for the ENTIRE batch
+t = torch.rand(1).item()  # e.g., t = 0.5 (single number, NOT 32!)
+print(f"Timestep: {t}, Batch size: {batch_size}")  # t=0.5, batch_size=32
+
+# Apply SAME noise level (t) to ALL 32 samples
+noisy_img = add_noise_linear(img_embeds, t, max_noise)
+# noisy_img.shape = [32, 512] (still 32 samples)
+# All 32 samples get noise with std = t * max_std = 0.5 * 0.3 = 0.15
+```
+
+**Key Point:**
+- ✅ One timestep `t` per batch (e.g., `t = 0.5`)
+- ✅ Same noise level applied to all samples in the batch
+- ✅ Timestep is NOT batch size - they're independent!
+- ✅ Batch size determines how many samples, timestep determines noise amount
 
 #### Step 3: Denoise with Cross-Modal Conditioning
 
