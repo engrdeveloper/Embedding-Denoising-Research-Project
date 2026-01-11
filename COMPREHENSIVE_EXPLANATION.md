@@ -15,6 +15,7 @@ This document explains every concept in the code, step by step, from basic conce
 7. [Data Flow Through the Network](#7-data-flow-through-the-network)
 8. [Training Process (Step-by-Step)](#8-training-process-step-by-step)
 9. [Inference Process](#9-inference-process)
+10. [Embedding Visualization and Cluster Analysis](#10-embedding-visualization-and-cluster-analysis)
 
 ---
 
@@ -1320,6 +1321,10 @@ for i in range(sim_matrix.size(0)):
 8. Inference Process
    ↓
    Clean embeddings → Apply denoiser → Evaluate alignment
+   ↓
+9. Embedding Analysis
+   ↓
+   t-SNE visualization and cluster analysis to understand embedding quality
 ```
 
 ---
@@ -1376,6 +1381,325 @@ def forward(self, x_noisy, x_clean=None, cond=None):
     x_denoised = x_noisy - d2  # [32, 512]
     return x_denoised
 ```
+
+---
+
+## 10. Embedding Visualization and Cluster Analysis
+
+### Why Analyze Embeddings?
+
+After training our models, we want to understand:
+1. **Smoothness**: How smoothly do embeddings transition in space?
+2. **Semantic Grouping**: How well do related concepts cluster together?
+3. **Alignment Quality**: How well are image and text embeddings aligned?
+
+These analyses help us understand if diffusion alignment creates better representations than raw CLIP or contrastive fine-tuning.
+
+---
+
+### 10.1 Embedding Space Visualization (t-SNE)
+
+#### What is t-SNE?
+
+**t-SNE (t-Distributed Stochastic Neighbor Embedding)** is a visualization technique that:
+- Reduces high-dimensional embeddings (512D) to 2D
+- Preserves local structure (similar embeddings stay close)
+- Makes it easy to visualize embedding spaces
+
+**Why use t-SNE?**
+- We can't visualize 512-dimensional space directly
+- t-SNE shows us the structure in a way humans can understand
+- Helps see if embeddings form meaningful groups
+
+#### How We Use It:
+
+```python
+# Combine image and text embeddings
+combined_raw = np.vstack([img_embeds_raw, txt_embeds_raw])  # [400, 512]
+combined_diffusion = np.vstack([img_embeds_diffusion, txt_embeds_diffusion])
+
+# Reduce to 2D using t-SNE
+tsne_raw = TSNE(n_components=2, random_state=42, perplexity=30, max_iter=1000)
+embeddings_2d_raw = tsne_raw.fit_transform(combined_raw)  # [400, 2]
+
+embeddings_2d_diffusion = tsne_diffusion.fit_transform(combined_diffusion)
+```
+
+**What happens:**
+1. **Input**: High-dimensional embeddings `[n_samples, 512]`
+2. **t-SNE processing**: Computes 2D projection preserving local structure
+3. **Output**: 2D coordinates `[n_samples, 2]` for visualization
+
+#### What We Visualize:
+
+**Three Methods Comparison:**
+- **Raw CLIP**: Original embeddings (baseline)
+- **Fine-Tuned CLIP**: Contrastive fine-tuned embeddings
+- **Diffusion Denoised**: Diffusion-aligned embeddings
+
+**What to Look For:**
+- **Better alignment**: Image and text embeddings should overlap more
+- **Smoother transitions**: Embeddings should form continuous regions
+- **Fewer gaps**: Less empty space between embedding clusters
+
+**Visual Interpretation:**
+```
+Good Alignment (Diffusion Denoised):
+Image embeddings: ●●●●●●●●●
+Text embeddings:  ●●●●●●●●●  ← Overlap well!
+
+Poor Alignment (Raw CLIP):
+Image embeddings: ●●●     ●●●
+Text embeddings:      ●●●     ← Separate clusters
+```
+
+#### Example Output:
+
+When we plot the 2D embeddings:
+- **Raw CLIP**: Image and text embeddings may be in separate regions
+- **Fine-Tuned**: Some overlap, but still gaps
+- **Diffusion Denoised**: Better overlap, smoother distribution
+
+**Key Insight:**
+- Better alignment means image-text pairs are closer in embedding space
+- This leads to better retrieval performance (higher Recall@K)
+
+---
+
+### 10.2 Cluster Analysis
+
+#### What is Cluster Analysis?
+
+**Cluster analysis** groups similar embeddings together:
+- Finds groups of embeddings that are similar to each other
+- Measures how well-defined these groups are
+- Helps understand semantic organization
+
+**Why use clustering?**
+- Understands if embeddings form meaningful semantic groups
+- Measures embedding quality (well-clustered = better)
+- Compares different methods quantitatively
+
+#### K-Means Clustering:
+
+```python
+# Perform K-means clustering
+n_clusters = 10  # Number of clusters
+kmeans_raw = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+labels_raw = kmeans_raw.fit_predict(combined_raw)  # Assign each embedding to a cluster
+
+kmeans_diffusion = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+labels_diffusion = kmeans_diffusion.fit_predict(combined_diffusion)
+```
+
+**How K-Means Works:**
+1. **Initialize**: Randomly place K cluster centers
+2. **Assign**: Assign each embedding to nearest cluster center
+3. **Update**: Move cluster centers to mean of assigned embeddings
+4. **Repeat**: Until convergence (assignments don't change)
+
+**Output:**
+- **Labels**: Each embedding gets a cluster ID (0 to K-1)
+- **Clusters**: Group of similar embeddings
+
+#### Silhouette Score:
+
+**Silhouette Score** measures cluster quality:
+- Range: -1 to 1
+- **Higher is better** (closer to 1)
+- Measures how well-separated clusters are
+
+**What it measures:**
+1. **Cohesion**: How similar embeddings are within the same cluster
+2. **Separation**: How different embeddings are from other clusters
+
+**Formula (simplified):**
+```
+Silhouette Score = (separation - cohesion) / max(separation, cohesion)
+```
+
+**Interpretation:**
+- **Score > 0.5**: Well-defined clusters
+- **Score 0.2-0.5**: Reasonable clusters
+- **Score < 0.2**: Poor clusters (might overlap too much)
+
+#### Comparison Across Methods:
+
+```python
+silhouette_raw = silhouette_score(combined_raw, labels_raw)
+silhouette_baseline = silhouette_score(combined_baseline, labels_baseline)
+silhouette_diffusion = silhouette_score(combined_diffusion, labels_diffusion)
+```
+
+**What We Compare:**
+- **Raw CLIP**: Baseline clustering quality
+- **Fine-Tuned CLIP**: Clustering after contrastive fine-tuning
+- **Diffusion Denoised**: Clustering after diffusion alignment
+
+**Expected Results:**
+- **Diffusion method** should have higher silhouette score
+- Better clusters = better semantic grouping
+- Higher score indicates embeddings are more organized
+
+#### What Cluster Analysis Tells Us:
+
+1. **Semantic Organization:**
+   - Well-clustered embeddings = better semantic understanding
+   - Related concepts should cluster together
+
+2. **Embedding Quality:**
+   - Higher silhouette score = better embeddings
+   - Indicates more meaningful representations
+
+3. **Method Comparison:**
+   - Compare how well each method organizes embeddings
+   - Diffusion should show better clustering than raw CLIP
+
+#### Visual Interpretation:
+
+**Cluster Visualization:**
+- Colors represent different clusters
+- Each point is an embedding (image or text)
+- Same color = same cluster (similar embeddings)
+
+**Good Clustering (Diffusion):**
+```
+Cluster 0: ●●●●● (red)
+Cluster 1: ●●●●● (blue)
+Cluster 2: ●●●●● (green)
+← Clear separation, well-defined clusters
+```
+
+**Poor Clustering (Raw CLIP):**
+```
+Cluster 0: ●● ● ● (red, scattered)
+Cluster 1:  ● ●● (blue, overlapping)
+Cluster 2: ● ● ●● (green, mixed)
+← Unclear boundaries, overlapping clusters
+```
+
+---
+
+### 10.3 Why These Analyses Matter
+
+#### Research Objectives:
+
+From the research proposal:
+- **Smoothness**: Do diffusion embeddings form smoother representations?
+  - t-SNE visualization shows smooth transitions
+  - Better alignment = smoother embedding space
+
+- **Semantic Clustering**: Do related concepts cluster better?
+  - Cluster analysis measures semantic grouping
+  - Higher silhouette score = better clustering
+
+- **Alignment Quality**: How well are embeddings aligned?
+  - t-SNE shows image-text overlap
+  - Better overlap = better alignment
+
+#### What We Learn:
+
+1. **Embedding Structure:**
+   - How embeddings are organized in space
+   - Whether methods create meaningful groups
+
+2. **Method Effectiveness:**
+   - Which method creates better embeddings
+   - Quantitative comparison beyond Recall@K
+
+3. **Semantic Understanding:**
+   - Whether embeddings capture semantic relationships
+   - Better clustering = better semantic understanding
+
+#### Connection to Performance:
+
+**Better Embeddings → Better Performance:**
+- Higher silhouette score → Better semantic grouping → Better retrieval
+- Better t-SNE alignment → Image-text pairs closer → Higher Recall@K
+
+**Expected Findings:**
+- Diffusion method should show:
+  - Better t-SNE alignment (image-text overlap)
+  - Higher silhouette score (better clustering)
+  - Smoother embedding space (continuous regions)
+
+---
+
+### 10.4 Implementation Details
+
+#### Data Collection:
+
+```python
+# Collect embeddings from test set (subset for speed)
+max_samples = 200  # Use subset for faster computation
+
+for images, captions in test_loader:
+    if sample_count >= max_samples:
+        break
+    
+    # Collect from all three methods:
+    # 1. Raw CLIP embeddings
+    # 2. Fine-Tuned CLIP embeddings
+    # 3. Diffusion denoised embeddings
+```
+
+**Why subset?**
+- t-SNE is computationally expensive
+- 200 samples is enough for visualization
+- Faster iteration during analysis
+
+#### Visualization Code:
+
+```python
+# Plot 3 subplots (one for each method)
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+# Each subplot shows:
+# - Image embeddings (scatter plot)
+# - Text embeddings (scatter plot)
+# - Overlap indicates alignment quality
+```
+
+#### Cluster Analysis Code:
+
+```python
+# K-means clustering
+n_clusters = 10  # Number of clusters
+kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+labels = kmeans.fit_predict(embeddings)
+
+# Silhouette score
+score = silhouette_score(embeddings, labels)
+```
+
+**Parameters:**
+- `n_clusters=10`: Number of clusters (can experiment with different values)
+- `random_state=42`: Reproducibility (same results each time)
+- `n_init=10`: Multiple initializations (better results)
+
+---
+
+### 10.5 Key Takeaways
+
+1. **t-SNE Visualization:**
+   - Shows embedding structure in 2D
+   - Better alignment = image-text overlap
+   - Helps understand embedding space organization
+
+2. **Cluster Analysis:**
+   - Measures semantic grouping quality
+   - Silhouette score: higher is better (range: -1 to 1)
+   - Better clusters = better semantic understanding
+
+3. **Method Comparison:**
+   - Compare Raw CLIP, Fine-Tuned, and Diffusion methods
+   - Quantitative metrics (silhouette score)
+   - Visual comparison (t-SNE plots)
+
+4. **Research Significance:**
+   - Addresses research objectives (smoothness, clustering)
+   - Provides evidence for method effectiveness
+   - Beyond just Recall@K metrics
 
 ---
 
